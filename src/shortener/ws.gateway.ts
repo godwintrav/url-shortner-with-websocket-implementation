@@ -76,9 +76,7 @@ export class ShortenerGateway implements OnGatewayConnection, OnGatewayDisconnec
     console.log(`ACK received. Stopped retries for ${shortenedURL}`);
   }
 
-  /**
-   * Send shortened URL reliably to a client
-   */
+  //Send shortened URL reliably to a client
   sendShortenedURL(clientId: string, shortenedURL: string) {
     const socket = this.clients.get(clientId);
     if (!socket) {
