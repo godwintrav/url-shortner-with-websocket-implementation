@@ -1,30 +1,153 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# URL Shortener with Reliable Async Delivery (NestJS + Socket.IO)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Overview
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+This project implements a URL Shortener server that receives a URL by an HTTP POST request, generates a shortened URL, and returns the shortened URL to the client asynchronously using a WebSocket (Socket.IO) connection and not using the HTTP response.
 
-## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+The server ensures reliable delivery of the shortened URL, supports client acknowledgment, and retries delivery if acknowledgment is not received from the websocket connection of the client.
+
+This solution is built using:
+
+- NestJS for the application framework.
+- Socket.IO for bi-directional real-time communication.
+- In-memory Maps for persistence (task requirement says no DB).
+
+
+## Features
+
+- Asynchronous shortened URL delivery over WebSocket (Socket.IO).
+- Reliable delivery with exponential backoff retry strategy.
+- Client acknowledgment protocol to confirm delivery.
+- Retry termination after max attempts (5 tries).
+- Shortened URLs accessible via standard HTTP GET.
+- Scalable and production ready design that can easily integrate Redis or other adapters for horizontal scaling.
+
+
+## Architecture
+
+                ┌─────────────────────────┐
+                │       HTTP Client       │
+                │  (Axios, Postman, etc)  │
+                └────────────┬────────────┘
+                             │ POST /url
+                             ▼
+                    ┌───────────────────┐
+                    │  NestJS REST API  │
+                    │ (UrlController)   │
+                    └─────────┬─────────┘
+                              │
+                              │ generate shortened URL
+                              ▼
+                     ┌────────────────────┐
+                     │ ShortenerGateway   │
+                     │ (Socket.IO server) │
+                     └─────────┬──────────┘
+                               │
+                               │ emit shortened URL
+                               ▼
+                 ┌──────────────────────────────┐
+                 │     Socket.IO Client        │
+                 │ (client-example.js)         │
+                 └────────────┬────────────────┘
+                              │ ACK shortened URL
+                              ▼
+                     ┌────────────────────┐
+                     │  Update            |
+                     |  Delivery Tracker  │
+                     │ (Map + timeouts)   │
+                     └────────────────────┘
+
+
+## COMPONENTS
+
+#### ShortnerController:
+
+- Handles POST /url requests with { url, clientId }
+- Generates and creates a 5-character short code by calling ShortnerService.
+- Hands over delivery to ShortenerGateway.
+
+
+#### ShortenerGateway:
+
+- Manages all Socket.IO client connections.
+- Tracks clients by clientId.
+- Sends shortened URLs asynchronously.
+- Implements retry + acknowledgment handling.
+
+#### StorageSrvice:
+
+- Stores every url in a map with the code being the key and the url being the value.
+- Simulates a DB.
+- Gets a url by the code.
+
+#### Client:
+
+- Registers with the server using register event.
+- Sends HTTP POST to trigger URL shortening.
+- Listens for shortened events and responds with ack.
+- Used for testing application
+
+## Design Decisions
+
+#### 1. Using Socket.IO:
+
+Why:
+
+- Automatic reconnection
+- Event-based communication which is easier to structure
+- Easier scaling for example using Redis Adapter in a Pub/Sub Architecture if there were multiple servers
+- Better error handling
+
+#### 2. Separate HTTP for Request & Socket.IO for Response:
+
+The task required:
+```
+
+After shortening the URL, the server has to return the result to the client, but not through the request's response. Be prepared to receive a response back from the client through the same protocol acknowledging that it has received the result.
+
+```
+
+I used:
+- HTTP POST → initiate shortening
+- Socket.IO → return shortened URL
+- Socket.IO → client ACK back to server
+
+This decouples request and response, allowing asynchronous operations and retry mechanisms.
+
+#### 3. Reliable Delivery with Retry and Acknowledgment:
+
+I built a delivery tracker using an in-memory Map:
+- Key: shortenedURL
+- Value: { acknowledged, timeouts[], attempt, clientId }
+
+
+Logic:
+
+- Send shortened URL immediately.
+- Schedule exponential backoff retries (1s, 2s, 4s, 8s, 16s) with setTimeout.
+- If client sends ack cancel retries.
+- Stop after 5 attempts if no ACK received.
+
+This ensures reliable delivery even with unstable connections as a user can reconnect with clientId and still get a response.
+
+
+#### 4. Client Registration
+
+Each client sends a register event with a unique clientId.
+
+The server maps this clientId to the Socket.IO connection.
+
+The same clientId is passed during the HTTP POST to associate requests with the correct client connection.
+
+
+#### 5. In-memory Persistence
+
+For simplicity and also because of task requirements, shortened URLs and delivery states are stored in memory.
+
+In production this can easily be replaced with Redis or a database for persistence and horizontal scaling.
+
+
 
 ## Project setup
 
@@ -51,49 +174,32 @@ $ npm run start:prod
 # unit tests
 $ npm run test
 
-# e2e tests
-$ npm run test:e2e
-
 # test coverage
 $ npm run test:cov
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Run the Socket.IO Client
 
 ```bash
-$ npm install -g mau
-$ mau deploy
+
+node client-example.js
+
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Testing the Flow
 
-## Resources
+1. Run the server.
+2. Run the client.
+3. Observe:
+- Client registers with server.
+- Client POSTs URL.
+- Server sends shortened URL over Socket.IO.
+- Client acknowledges.
+- Server stops retries.
 
-Check out a few resources that may come in handy when working with NestJS:
+## Future Improvements
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- Add a Redis adapter for scaling multiple gateway instances using a Pub/Sub Architecture.
+- Persist shortened URLs to a real DB.
+- Add authentication & authorization for clients.
+- Add monitoring for retry failures and delivery stats.
