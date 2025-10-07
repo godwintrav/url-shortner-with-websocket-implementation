@@ -22,6 +22,7 @@ This solution is built using:
 - Retry termination after max attempts (5 tries).
 - Shortened URLs accessible via standard HTTP GET.
 - Scalable and production ready design that can easily integrate Redis or other adapters for horizontal scaling.
+- Complete unit test coverage.
 
 
 ## Architecture
